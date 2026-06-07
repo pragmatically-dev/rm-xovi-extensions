@@ -41,3 +41,21 @@ The script to build this hashtable is included in the installation of XOVI, at `
 ### Please remember to clear your qmlcache directory after creating / deleting qrr files, to make sure no cached versions are loaded
 
 `QML_DISABLE_DISK_CACHE=1` is your friend; when qt-resource-rebuilder is installed, this environment variable is set by default when starting XOVI.
+
+## Hot reload (runtime diff replacement)
+
+Normally modifications apply once, as Xochitl registers its QT resources at startup. qt-resource-rebuilder also exports a runtime path so another extension can replace a loaded `.qmd` and have the affected resources re-registered live, without restarting Xochitl:
+
+```c
+// Replace one external diff (by id) and re-register only the resource roots
+// that hold the files it targets. Returns the number of roots reloaded, or -1
+// if the new diff failed to parse (the previous diff stays applied).
+int qrr_reload_external_diff(const char *id, const char *contents);
+
+// Re-register every tracked root without changing any diff.
+int qrr_reload_all_roots(void);
+```
+
+Every registered resource root is remembered together with its pristine originals, so a reload always rebuilds from the same bytes a cold start would use; on the QMLDiff side the merged diff state is re-derived from the pristine diffs, so slots and templates re-resolve correctly on every replace (see [docs/HOT_RELOAD.md](docs/HOT_RELOAD.md) and QMLDiff's own `docs/HOT_RELOAD.md`).
+
+Note: this swaps the *resources*. Making the change visible on screen (clearing the QML component cache and re-instantiating the affected items) is the caller's job. A minimal end-to-end example — drop a `.qmd` into a folder on the tablet and watch the toolbar change live — lives in [examples/hot-reload](examples/hot-reload).

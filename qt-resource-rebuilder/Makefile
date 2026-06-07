@@ -1,4 +1,4 @@
-objects = main.o hash.o indexfile.o systemversion.o rccload.o xovi.o libqmldiff.a
+objects = main.o hash.o indexfile.o systemversion.o rccload.o hotreload.o xovi.o libqmldiff.a
 
 CXX += -I ${SDKTARGETSYSROOT}/usr/include/QtCore/ -fPIC
 CC += -D_GNU_SOURCE -fPIC
@@ -22,9 +22,10 @@ libqmldiff.a	:
 xovi.c xovi.h	&: $(name).xovi
 	python3 ${XOVI_REPO}/util/xovigen.py -o xovi.c -H xovi.h $(name).xovi
 
-main.o		: xovi.h types.h indexfile.h qmldiff.h ../util.h systemversion.h
+main.o		: xovi.h types.h indexfile.h qmldiff.h hotreload.h ../util.h systemversion.h
 hash.o		: hash.h
 indexfile.o	: xovi.h rccload.h ../util.h
+hotreload.o	: xovi.h types.h qmldiff.h hotreload.h ../util.h
 
 
 .PHONY  : clean

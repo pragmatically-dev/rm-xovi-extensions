@@ -12,9 +12,13 @@
 #include "types.h"
 #include "indexfile.h"
 #include "qmldiff.h"
+#include "hotreload.h"
 #include "../../util.h"
 #include "../xovi.h"
 #include "systemversion.h"
+
+// Shared lock (declared extern in types.h) - hotreload.c takes it too.
+pthread_mutex_t mainMutex;
 
 /*
     ModificationDefinition are raw structures that come from the modification files
@@ -96,6 +100,47 @@ void nameOfChild(struct ResourceRoot *root, int node, int *size, char *buffer, i
         buffer[i / 2] = ((char *)root->name)[name_offset + i];
     }
     buffer[name_length] = 0;
+}
+
+// Walk the big-endian qrc trie from node 0, descending one path component at a
+// time, to decide whether this root contains `path` - a full qrc path exactly as
+// qmldiff reports it (e.g. "/qt/qml/.../SettingsMenu.qml"). Used by the hot-reload
+// path so a changed diff only re-registers the roots it actually touches. Reads
+// the pristine tree/name (node names never change, only data offsets do).
+bool rootContainsPath(uint8_t *tree, uint8_t *name, const char *path) {
+    struct ResourceRoot root = { .tree = tree, .name = name };
+    int node = 0; // the root directory
+
+    while(*path == '/') path++; // the trie root is "/"; skip leading slash(es)
+
+    char component[256], childName[256];
+    while(*path) {
+        // Split off the next path component.
+        int len = 0;
+        while(path[len] && path[len] != '/') len++;
+        if(len == 0) { path++; continue; }
+        if(len > 255) return false;
+        memcpy(component, path, len);
+        component[len] = 0;
+        path += len;
+        while(*path == '/') path++;
+
+        // The current node must be a directory; scan its children for `component`.
+        int offset = findOffset(node) + 4;
+        uint16_t flags = readUInt16(root.tree, offset);
+        if(!(flags & DIRECTORY)) return false;
+        uint32_t childCount = readUInt32(root.tree, offset + 2);
+        uint32_t childOffset = readUInt32(root.tree, offset + 2 + 4);
+
+        int found = -1;
+        for(uint32_t child = childOffset; child < childOffset + childCount; child++) {
+            nameOfChild(&root, child, NULL, childName, 256);
+            if(strcmp(childName, component) == 0) { found = child; break; }
+        }
+        if(found < 0) return false;
+        node = found;
+    }
+    return true;
 }
 
 void testWriteToFile(const char *fname, struct ResourceRoot *root) {
@@ -317,13 +362,18 @@ struct TempFileReference testGetFromFile(const char *filename){
     return root;
 }
 
-int override$_Z21qRegisterResourceDataiPKhS0_S0_(int version, uint8_t *tree, uint8_t *name, uint8_t *data) {
-    pthread_mutex_lock(&mainMutex);
-    LOG("[%s]: Asked to add %d %p %p %p to QT resource root.\n", NAME, version, tree, name, data);
+// Rebuild a resource root from the PRISTINE originals, applying every currently
+// loaded modification. On return, when something changed *outTree and *outData
+// are freshly malloc'd (caller owns them); otherwise they alias the originals and
+// must not be freed. Returns whether anything was modified. Shared by the
+// register override and the hot-reload path (hotreload.c), so a reload rebuilds
+// from the same pristine bytes rather than cumulatively.
+bool rebuildResourceRoot(uint8_t *origTree, uint8_t *origName, uint8_t *origData,
+                         uint8_t **outTree, uint8_t **outData) {
     struct ResourceRoot resource = {
-        .data = data,
-        .name = name,
-        .tree = tree,
+        .data = origData,
+        .name = origName,
+        .tree = origTree,
 
         .treeSize = 0,
         .dataSize = 0,
@@ -335,27 +385,38 @@ int override$_Z21qRegisterResourceDataiPKhS0_S0_(int version, uint8_t *tree, uin
 
     statArchive(&resource, 0);
     resource.tree = malloc(resource.treeSize);
-    memcpy(resource.tree, tree, resource.treeSize);
+    memcpy(resource.tree, origTree, resource.treeSize);
 
     processNode(&resource, 0, "");
     LOG("[%s]: Processing done!\n", NAME);
 
-    // Did we alter anything?
     if(resource.entriesAffected) {
         LOG("[%s]: Rebuilding data tables...\n", NAME);
-        // Yes - good. Rebuild the data table, and use the affected variables instead.
         applyDataTableChanges(&resource);
-        tree = resource.tree;
-        name = resource.name;
-        data = resource.data;
-    } else {
-        // No. Free the used memory
-        free(resource.tree);
+        *outTree = resource.tree;
+        *outData = resource.data;
+        return true;
     }
+    // Nothing changed - drop the working copy and reuse the originals.
+    free(resource.tree);
+    *outTree = origTree;
+    *outData = origData;
+    return false;
+}
+
+int override$_Z21qRegisterResourceDataiPKhS0_S0_(int version, uint8_t *tree, uint8_t *name, uint8_t *data) {
+    pthread_mutex_lock(&mainMutex);
+    LOG("[%s]: Asked to add %d %p %p %p to QT resource root.\n", NAME, version, tree, name, data);
+
+    uint8_t *useTree, *useData;
+    bool modified = rebuildResourceRoot(tree, name, data, &useTree, &useData);
+
+    // Remember this root so a hot reload can re-register it from the originals.
+    hrRegisterRoot(version, tree, name, data, useTree, useData, modified);
 
     // Invoke the original code
-    LOG("[%s]: Invoking with %d %p %p %p.\n", NAME, version, tree, name, data);
-    int status = $_Z21qRegisterResourceDataiPKhS0_S0_(version, tree, name, data);
+    LOG("[%s]: Invoking with %d %p %p %p.\n", NAME, version, useTree, name, useData);
+    int status = $_Z21qRegisterResourceDataiPKhS0_S0_(version, useTree, name, useData);
     pthread_mutex_unlock(&mainMutex);
     return status;
 }

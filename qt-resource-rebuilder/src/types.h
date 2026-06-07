@@ -17,7 +17,9 @@
 
 #define MODIF_REPLACE       1
 #define MODIF_INJECT        2
-static pthread_mutex_t mainMutex;
+// Defined in main.c. Shared so hotreload.c can take the same lock when it
+// re-registers resource roots at runtime.
+extern pthread_mutex_t mainMutex;
 
 struct ReplacementEntry {
     int node;
