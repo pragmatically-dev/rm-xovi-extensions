@@ -1,0 +1,8 @@
+version 0.1.0
+
+; Minimal hot-reload PoC: watches /home/root/hot-reload for .qmd files and
+; applies them live through the hot-reload-capable qt-resource-rebuilder.
+; It injects no qmldiff of its own and declares no resources.
+
+depends-on qt-resource-rebuilder:0.3.0
+import? qt-resource-rebuilder$qrr_reload_external_diff

@@ -1,0 +1,15 @@
+; Hot-reload demo: swap the toolbar Tags tool icon, live.
+;
+;   scp demo/tag-icon.qmd root@10.11.99.1:/home/root/hot-reload/
+;
+; Open any document so the toolbar is visible: the tag icon becomes the
+; cloud-upload icon WITHOUT restarting xochitl. Edit the icon name below
+; (eye, cog, keyboard, accessibility, ...) and scp again — it changes again.
+
+AFFECT /qt/qml/xofm/libs/toolbar/qml/TagsMenu.qml
+    TRAVERSE ToolbarTool#root
+        REPLACE iconSource WITH {
+            iconSource: "qrc:/ark/icons/cloud_upload"
+        }
+    END TRAVERSE
+END AFFECT
